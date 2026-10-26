@@ -40,23 +40,23 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Ініціалізація термінала
+    // 1. Ініціалізація повноекранного термінала
     enable_raw_mode()?;
     let mut out = stdout();
     execute!(out, EnterAlternateScreen, Hide, Clear(ClearType::All))?;
 
-    // 2. Ініціалізація sysinfo (new_all гарантує знаходження всіх 28 потоків)
+    // 2. Ініціалізація sysinfo
     let mut sys = System::new_all();
     
-    // Перший замір
-    sys.refresh_cpu_all();
+    // Первинний замір показників
+    sys.refresh_cpu_usage();
     sys.refresh_memory();
     
-    // Пауза для розрахунку початкової дельти
+    // Пауза 300 мс, аби ОС обрахувала першу дельту між тактами процесора
     thread::sleep(Duration::from_millis(300));
     
-    // Другий замір
-    sys.refresh_cpu_all();
+    // Другий замір перед запуском моніторингу
+    sys.refresh_cpu_usage();
     sys.refresh_memory();
 
     let refresh_rate = Duration::from_millis(1000);
@@ -73,18 +73,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if last_tick.elapsed() >= refresh_rate {
-            // Оновлюємо ядра та пам'ять
-            sys.refresh_cpu_all();
+            // Оновлюємо виключно CPU і пам'ять через точні методи версії 0.30.13
+            sys.refresh_cpu_usage();
             sys.refresh_memory();
             last_tick = Instant::now();
 
             // Очищення екрана перед новим кадром
             execute!(out, MoveTo(0, 0), Clear(ClearType::All))?;
 
-            // Заголовок з маркером успішної збірки
+            // Заголовок
             execute!(out, SetForegroundColor(Color::Cyan))?;
             writeln!(out, "================================================================================")?;
-            writeln!(out, "            HARDWARE RESOURCE MONITOR (Variant 14 - BUILD SUCCESS)              ")?;
+            writeln!(out, "                   HARDWARE RESOURCE MONITOR (Variant 14)                       ")?;
             writeln!(out, "                    Press 'q' or 'Esc' to exit the monitor                      ")?;
             writeln!(out, "================================================================================")?;
             execute!(out, ResetColor)?;
