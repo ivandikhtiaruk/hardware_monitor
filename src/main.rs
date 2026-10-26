@@ -45,12 +45,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut out = stdout();
     execute!(out, EnterAlternateScreen, Hide, Clear(ClearType::All))?;
 
-    // 2. Ініціалізація sysinfo з прямим запуском лічильників CPU під Windows
+    // 2. Ініціалізація sysinfo
     let mut sys = System::new_all();
-    sys.refresh_cpu_usage();
-    sys.refresh_memory();
-    thread::sleep(Duration::from_millis(250));
-    sys.refresh_cpu_usage();
+    sys.refresh_all();
+    thread::sleep(Duration::from_millis(300));
+    sys.refresh_all();
 
     let refresh_rate = Duration::from_millis(1000);
     let mut last_tick = Instant::now();
@@ -66,9 +65,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if last_tick.elapsed() >= refresh_rate {
-            // Пряме оновлення CPU та пам'яті через рідні методи
-            sys.refresh_cpu_usage();
-            sys.refresh_memory();
+            // Оновлюємо всі дані системи гарантованим методом
+            sys.refresh_all();
             last_tick = Instant::now();
 
             // Очищення екрана перед новим кадром
