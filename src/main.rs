@@ -13,7 +13,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
+use sysinfo::System;
 
 /// Генерація візуального прогрес-бару з кольоровою індикацією
 fn make_progress_bar(percentage: f32, width: usize) -> (String, Color) {
@@ -45,15 +45,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut out = stdout();
     execute!(out, EnterAlternateScreen, Hide, Clear(ClearType::All))?;
 
-    // 2. Ініціалізація sysinfo (перевірена конфігурація)
-    let refresh_kind = RefreshKind::new()
-        .with_cpu(CpuRefreshKind::everything())
-        .with_memory(MemoryRefreshKind::everything());
-    let mut sys = System::new_with_specifics(refresh_kind);
-
-    // Перший вимір (калібрування дельти)
-    sys.refresh_specifics(refresh_kind);
-    thread::sleep(Duration::from_millis(300));
+    // 2. Ініціалізація sysinfo з прямим запуском лічильників CPU під Windows
+    let mut sys = System::new_all();
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
+    thread::sleep(Duration::from_millis(250));
+    sys.refresh_cpu_usage();
 
     let refresh_rate = Duration::from_millis(1000);
     let mut last_tick = Instant::now();
@@ -69,8 +66,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if last_tick.elapsed() >= refresh_rate {
-            // Оновлюємо дані
-            sys.refresh_specifics(refresh_kind);
+            // Пряме оновлення CPU та пам'яті через рідні методи
+            sys.refresh_cpu_usage();
+            sys.refresh_memory();
             last_tick = Instant::now();
 
             // Очищення екрана перед новим кадром
@@ -94,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             writeln!(out, "{} {:5.1}%", cpu_bar, global_cpu)?;
             execute!(out, ResetColor)?;
 
-            // 2. Вивід ядер у ДВІ колонки для компактності (щоб помістилися всі 28 ядер!)
+            // 2. Вивід 28 ядер у ДВІ колонки
             writeln!(out, " Per Core Breakdown (2 columns):")?;
             let cpus: Vec<_> = sys.cpus().iter().enumerate().collect();
             let half = (cpus.len() + 1) / 2;
@@ -102,19 +100,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for i in 0..half {
                 // Ліва колонка
                 let (idx1, cpu1) = cpus[i];
-                let (bar1, col1) = make_progress_bar(cpu1.cpu_usage(), 10);
+                let usage1 = cpu1.cpu_usage();
+                let (bar1, col1) = make_progress_bar(usage1, 10);
                 write!(out, "  Core #{:<2}: ", idx1)?;
                 execute!(out, SetForegroundColor(col1))?;
-                write!(out, "{} {:5.1}%   ", bar1, cpu1.cpu_usage())?;
+                write!(out, "{} {:5.1}%   ", bar1, usage1)?;
                 execute!(out, ResetColor)?;
 
                 // Права колонка
                 if i + half < cpus.len() {
                     let (idx2, cpu2) = cpus[i + half];
-                    let (bar2, col2) = make_progress_bar(cpu2.cpu_usage(), 10);
+                    let usage2 = cpu2.cpu_usage();
+                    let (bar2, col2) = make_progress_bar(usage2, 10);
                     write!(out, "Core #{:<2}: ", idx2)?;
                     execute!(out, SetForegroundColor(col2))?;
-                    writeln!(out, "{} {:5.1}%", bar2, cpu2.cpu_usage())?;
+                    writeln!(out, "{} {:5.1}%", bar2, usage2)?;
                     execute!(out, ResetColor)?;
                 } else {
                     writeln!(out)?;
