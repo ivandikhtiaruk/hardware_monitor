@@ -5,7 +5,7 @@ use crossterm::{
     style::{Color, ResetColor, SetForegroundColor},
     terminal::{
         disable_raw_mode, enable_raw_mode, Clear, ClearType, 
-        EnterAlternateScreen, LeaveAlternateScreen
+        EnterAlternateScreen, LeaveAlternateScreen,
     },
 };
 use std::{
@@ -47,9 +47,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Ініціалізація sysinfo
     let mut sys = System::new_all();
-    sys.refresh_all();
-    thread::sleep(Duration::from_millis(300));
-    sys.refresh_all();
+    
+    // Первинний замір показників
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
+    
+    // Необхідна пауза, аби ОС обрахувала різницю між тактами процесора
+    thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+    
+    // Другий замір, після якого з'являться перші реальні відсотки
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
 
     let refresh_rate = Duration::from_millis(1000);
     let mut last_tick = Instant::now();
@@ -65,8 +73,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if last_tick.elapsed() >= refresh_rate {
-            // Оновлюємо всі дані системи гарантованим методом
-            sys.refresh_all();
+            // Оновлюємо виключно CPU і пам'ять (працює миттєво і коректно рахує дельту)
+            sys.refresh_cpu_usage();
+            sys.refresh_memory();
             last_tick = Instant::now();
 
             // Очищення екрана перед новим кадром
@@ -90,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             writeln!(out, "{} {:5.1}%", cpu_bar, global_cpu)?;
             execute!(out, ResetColor)?;
 
-            // 2. Вивід 28 ядер у ДВІ колонки
+            // 2. Вивід ядер у дві колонки
             writeln!(out, " Per Core Breakdown (2 columns):")?;
             let cpus: Vec<_> = sys.cpus().iter().enumerate().collect();
             let half = (cpus.len() + 1) / 2;
