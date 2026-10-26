@@ -13,7 +13,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
+use sysinfo::System;
 
 /// Генерація візуального прогрес-бару з кольоровою індикацією
 fn make_progress_bar(percentage: f32, width: usize) -> (String, Color) {
@@ -40,26 +40,22 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Ініціалізація повноекранного термінала
+    // 1. Ініціалізація термінала
     enable_raw_mode()?;
     let mut out = stdout();
     execute!(out, EnterAlternateScreen, Hide, Clear(ClearType::All))?;
 
-    // 2. Ініціалізація sysinfo з повними лічильниками CPU (критично для Windows)
-    let mut sys = System::new_with_specifics(
-        RefreshKind::nothing()
-            .with_cpu(CpuRefreshKind::everything())
-            .with_memory(MemoryRefreshKind::everything()),
-    );
-
-    // Первинний замір показників
+    // 2. Ініціалізація sysinfo (new_all гарантує знаходження всіх 28 потоків)
+    let mut sys = System::new_all();
+    
+    // Перший замір
     sys.refresh_cpu_all();
     sys.refresh_memory();
-
-    // Необхідна пауза (500 мс) для підрахунку першої дельти часу в Windows
-    thread::sleep(Duration::from_millis(500));
-
-    // Другий замір перед стартом інтерфейсу
+    
+    // Пауза для розрахунку початкової дельти
+    thread::sleep(Duration::from_millis(300));
+    
+    // Другий замір
     sys.refresh_cpu_all();
     sys.refresh_memory();
 
@@ -77,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if last_tick.elapsed() >= refresh_rate {
-            // Оновлюємо ядра примусово через refresh_cpu_all
+            // Оновлюємо ядра та пам'ять
             sys.refresh_cpu_all();
             sys.refresh_memory();
             last_tick = Instant::now();
@@ -85,10 +81,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Очищення екрана перед новим кадром
             execute!(out, MoveTo(0, 0), Clear(ClearType::All))?;
 
-            // Заголовок з маркером оновлення v2
+            // Заголовок з маркером успішної збірки
             execute!(out, SetForegroundColor(Color::Cyan))?;
             writeln!(out, "================================================================================")?;
-            writeln!(out, "              HARDWARE RESOURCE MONITOR (Variant 14 - v2)                       ")?;
+            writeln!(out, "            HARDWARE RESOURCE MONITOR (Variant 14 - BUILD SUCCESS)              ")?;
             writeln!(out, "                    Press 'q' or 'Esc' to exit the monitor                      ")?;
             writeln!(out, "================================================================================")?;
             execute!(out, ResetColor)?;
