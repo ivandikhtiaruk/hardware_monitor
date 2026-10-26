@@ -15,6 +15,120 @@ use std::{
 };
 use sysinfo::System;
 
+// Системна структура ядра Windows для точного зняття тактових імпульсів CPU
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+struct SystemProcessorPerformanceInformation {
+    idle_time: i64,
+    kernel_time: i64,
+    user_time: i64,
+    dpc_time: i64,
+    interrupt_time: i64,
+    interrupt_count: u32,
+}
+
+type NtQuerySystemInformationFn = unsafe extern "system" fn(
+    u32,
+    *mut std::ffi::c_void,
+    u32,
+    *mut u32,
+) -> i32;
+
+extern "system" {
+    fn GetModuleHandleA(lp_module_name: *const u8) -> *mut std::ffi::c_void;
+    fn GetProcAddress(h_module: *mut std::ffi::c_void, lp_proc_name: *const u8) -> *mut std::ffi::c_void;
+}
+
+struct WinCpuTracker {
+    query_fn: Option<NtQuerySystemInformationFn>,
+    prev_times: Vec<SystemProcessorPerformanceInformation>,
+    num_cores: usize,
+}
+
+impl WinCpuTracker {
+    fn new(num_cores: usize) -> Self {
+        let query_fn = unsafe {
+            let ntdll = GetModuleHandleA(b"ntdll.dll\0".as_ptr());
+            if ntdll.is_null() {
+                None
+            } else {
+                let proc = GetProcAddress(ntdll, b"NtQuerySystemInformation\0".as_ptr());
+                if proc.is_null() {
+                    None
+                } else {
+                    Some(std::mem::transmute(proc))
+                }
+            }
+        };
+
+        let mut tracker = Self {
+            query_fn,
+            prev_times: vec![SystemProcessorPerformanceInformation::default(); num_cores],
+            num_cores,
+        };
+
+        let mut init_times = vec![SystemProcessorPerformanceInformation::default(); num_cores];
+        if tracker.fetch_raw(&mut init_times) {
+            tracker.prev_times = init_times;
+        }
+        tracker
+    }
+
+    fn fetch_raw(&mut self, dest: &mut [SystemProcessorPerformanceInformation]) -> bool {
+        if let Some(q_fn) = self.query_fn {
+            let mut ret_len = 0u32;
+            let status = unsafe {
+                q_fn(
+                    8, // SystemProcessorPerformanceInformation
+                    dest.as_mut_ptr() as *mut std::ffi::c_void,
+                    (dest.len() * std::mem::size_of::<SystemProcessorPerformanceInformation>()) as u32,
+                    &mut ret_len,
+                )
+            };
+            status >= 0
+        } else {
+            false
+        }
+    }
+
+    fn get_usages(&mut self) -> (f32, Vec<f32>) {
+        let mut curr_times = vec![SystemProcessorPerformanceInformation::default(); self.num_cores];
+        if !self.fetch_raw(&mut curr_times) {
+            return (0.0, vec![0.0; self.num_cores]);
+        }
+
+        let mut core_usages = Vec::with_capacity(self.num_cores);
+        for i in 0..self.num_cores {
+            let prev = self.prev_times[i];
+            let curr = curr_times[i];
+
+            let idle = (curr.idle_time - prev.idle_time) as f64;
+            let kernel = (curr.kernel_time - prev.kernel_time) as f64;
+            let user = (curr.user_time - prev.user_time) as f64;
+
+            // У Windows KernelTime вже включає IdleTime
+            let total = kernel + user;
+            let usage = if total > 0.0 {
+                let busy = total - idle;
+                ((busy / total) * 100.0).clamp(0.0, 100.0) as f32
+            } else {
+                0.0
+            };
+            core_usages.push(usage);
+        }
+
+        self.prev_times = curr_times;
+
+        let global_cpu = if core_usages.is_empty() {
+            0.0
+        } else {
+            core_usages.iter().sum::<f32>() / core_usages.len() as f32
+        };
+
+        (global_cpu, core_usages)
+    }
+}
+
 fn make_progress_bar(percentage: f32, width: usize) -> (String, Color) {
     let clamped = percentage.clamp(0.0, 100.0);
     let filled = ((clamped / 100.0) * width as f32).round() as usize;
@@ -44,17 +158,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     execute!(out, EnterAlternateScreen, Hide, Clear(ClearType::All))?;
 
     let mut sys = System::new_all();
-    
-    // Первинний замір для sysinfo 0.30.13
-    sys.refresh_cpu_usage();
     sys.refresh_memory();
-    
-    // Пауза для обрахунку дельти
+
+    let num_cores = sys.cpus().len().max(1);
+    let mut cpu_tracker = WinCpuTracker::new(num_cores);
+
+    // Пауза для розрахунку первинної дельти
     thread::sleep(Duration::from_millis(300));
-    
-    // Другий замір перед запуском моніторингу
-    sys.refresh_cpu_usage();
-    sys.refresh_memory();
 
     let refresh_rate = Duration::from_millis(1000);
     let mut last_tick = Instant::now();
@@ -69,48 +179,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if last_tick.elapsed() >= refresh_rate {
-            // Оновлюємо конкретно CPU та пам'ять
-            sys.refresh_cpu_usage();
+            // Отримуємо реальне навантаження напряму від ядра Windows
+            let (global_cpu, core_usages) = cpu_tracker.get_usages();
             sys.refresh_memory();
             last_tick = Instant::now();
 
             execute!(out, MoveTo(0, 0), Clear(ClearType::All))?;
 
-            // Нова назва з міткою BUILD #12
             execute!(out, SetForegroundColor(Color::Cyan))?;
             writeln!(out, "================================================================================")?;
-            writeln!(out, "             HARDWARE RESOURCE MONITOR (Variant 14 - BUILD #12)                 ")?;
+            writeln!(out, "             HARDWARE RESOURCE MONITOR (Variant 14 - KERNEL DIRECT)             ")?;
             writeln!(out, "                    Press 'q' or 'Esc' to exit the monitor                      ")?;
             writeln!(out, "================================================================================")?;
             execute!(out, ResetColor)?;
 
-            // 1. Інтегральне навантаження CPU
-            let global_cpu = sys.global_cpu_info().cpu_usage();
+            // 1. Загальне навантаження CPU
             let (cpu_bar, cpu_color) = make_progress_bar(global_cpu, 25);
-
             execute!(out, SetForegroundColor(Color::White))?;
             write!(out, " Total CPU Load:  ")?;
             execute!(out, SetForegroundColor(cpu_color))?;
             writeln!(out, "{} {:5.1}%", cpu_bar, global_cpu)?;
             execute!(out, ResetColor)?;
 
-            // 2. Всі ядра
+            // 2. Всі ядра у 2 колонки
             writeln!(out, " Per Core Breakdown (2 columns):")?;
-            let cpus: Vec<_> = sys.cpus().iter().enumerate().collect();
-            let half = (cpus.len() + 1) / 2;
+            let half = (core_usages.len() + 1) / 2;
 
             for i in 0..half {
-                let (idx1, cpu1) = cpus[i];
-                let usage1 = cpu1.cpu_usage();
+                let usage1 = core_usages[i];
                 let (bar1, col1) = make_progress_bar(usage1, 10);
-                write!(out, "  Core #{:<2}: ", idx1)?;
+                write!(out, "  Core #{:<2}: ", i)?;
                 execute!(out, SetForegroundColor(col1))?;
                 write!(out, "{} {:5.1}%   ", bar1, usage1)?;
                 execute!(out, ResetColor)?;
 
-                if i + half < cpus.len() {
-                    let (idx2, cpu2) = cpus[i + half];
-                    let usage2 = cpu2.cpu_usage();
+                if i + half < core_usages.len() {
+                    let idx2 = i + half;
+                    let usage2 = core_usages[idx2];
                     let (bar2, col2) = make_progress_bar(usage2, 10);
                     write!(out, "Core #{:<2}: ", idx2)?;
                     execute!(out, SetForegroundColor(col2))?;
