@@ -15,7 +15,6 @@ use std::{
 };
 use sysinfo::System;
 
-/// Генерація візуального прогрес-бару з кольоровою індикацією
 fn make_progress_bar(percentage: f32, width: usize) -> (String, Color) {
     let clamped = percentage.clamp(0.0, 100.0);
     let filled = ((clamped / 100.0) * width as f32).round() as usize;
@@ -40,19 +39,17 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Ініціалізація повноекранного термінала
     enable_raw_mode()?;
     let mut out = stdout();
     execute!(out, EnterAlternateScreen, Hide, Clear(ClearType::All))?;
 
-    // 2. Ініціалізація sysinfo
     let mut sys = System::new_all();
     
-    // Первинний замір показників
+    // Первинний замір для sysinfo 0.30.13
     sys.refresh_cpu_usage();
     sys.refresh_memory();
     
-    // Пауза 300 мс, аби ОС обрахувала першу дельту між тактами процесора
+    // Пауза для обрахунку дельти
     thread::sleep(Duration::from_millis(300));
     
     // Другий замір перед запуском моніторингу
@@ -63,7 +60,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_tick = Instant::now();
 
     loop {
-        // Перевірка клавіш виходу (q або Esc)
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
@@ -73,18 +69,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if last_tick.elapsed() >= refresh_rate {
-            // Оновлюємо виключно CPU і пам'ять через точні методи версії 0.30.13
+            // Оновлюємо конкретно CPU та пам'ять
             sys.refresh_cpu_usage();
             sys.refresh_memory();
             last_tick = Instant::now();
 
-            // Очищення екрана перед новим кадром
             execute!(out, MoveTo(0, 0), Clear(ClearType::All))?;
 
-            // Заголовок
+            // Нова назва з міткою BUILD #12
             execute!(out, SetForegroundColor(Color::Cyan))?;
             writeln!(out, "================================================================================")?;
-            writeln!(out, "                   HARDWARE RESOURCE MONITOR (Variant 14)                       ")?;
+            writeln!(out, "             HARDWARE RESOURCE MONITOR (Variant 14 - BUILD #12)                 ")?;
             writeln!(out, "                    Press 'q' or 'Esc' to exit the monitor                      ")?;
             writeln!(out, "================================================================================")?;
             execute!(out, ResetColor)?;
@@ -99,13 +94,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             writeln!(out, "{} {:5.1}%", cpu_bar, global_cpu)?;
             execute!(out, ResetColor)?;
 
-            // 2. Вивід ядер у дві колонки
+            // 2. Всі ядра
             writeln!(out, " Per Core Breakdown (2 columns):")?;
             let cpus: Vec<_> = sys.cpus().iter().enumerate().collect();
             let half = (cpus.len() + 1) / 2;
 
             for i in 0..half {
-                // Ліва колонка
                 let (idx1, cpu1) = cpus[i];
                 let usage1 = cpu1.cpu_usage();
                 let (bar1, col1) = make_progress_bar(usage1, 10);
@@ -114,7 +108,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 write!(out, "{} {:5.1}%   ", bar1, usage1)?;
                 execute!(out, ResetColor)?;
 
-                // Права колонка
                 if i + half < cpus.len() {
                     let (idx2, cpu2) = cpus[i + half];
                     let usage2 = cpu2.cpu_usage();
@@ -130,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             writeln!(out, "--------------------------------------------------------------------------------")?;
 
-            // 3. RAM Usage
+            // 3. RAM
             let total_ram = sys.total_memory();
             let used_ram = sys.used_memory();
             let ram_percentage = if total_ram > 0 {
@@ -153,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             execute!(out, ResetColor)?;
 
-            // 4. Swap Usage
+            // 4. Swap
             let total_swap = sys.total_swap();
             let used_swap = sys.used_swap();
             let swap_percentage = if total_swap > 0 {
@@ -181,7 +174,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Відновлення термінала при виході
     execute!(out, Clear(ClearType::All), Show, LeaveAlternateScreen)?;
     disable_raw_mode()?;
     println!("Монітор успішно завершив роботу.");
