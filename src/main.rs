@@ -13,7 +13,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use sysinfo::System;
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
 /// Генерація візуального прогрес-бару з кольоровою індикацією
 fn make_progress_bar(percentage: f32, width: usize) -> (String, Color) {
@@ -45,9 +45,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut out = stdout();
     execute!(out, EnterAlternateScreen, Hide, Clear(ClearType::All))?;
 
-    // 2. Ініціалізація системи збору метрик
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    // 2. Ініціалізація sysinfo (перевірена конфігурація)
+    let refresh_kind = RefreshKind::new()
+        .with_cpu(CpuRefreshKind::everything())
+        .with_memory(MemoryRefreshKind::everything());
+    let mut sys = System::new_with_specifics(refresh_kind);
+
+    // Перший вимір (калібрування дельти)
+    sys.refresh_specifics(refresh_kind);
     thread::sleep(Duration::from_millis(300));
 
     let refresh_rate = Duration::from_millis(1000);
@@ -64,12 +69,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if last_tick.elapsed() >= refresh_rate {
-            // Оновлюємо дані процесора та пам'яті
-            sys.refresh_cpu_all();
-            sys.refresh_memory();
+            // Оновлюємо дані
+            sys.refresh_specifics(refresh_kind);
             last_tick = Instant::now();
 
-            // Очищення екрана перед новим кадром для усунення артефактів
+            // Очищення екрана перед новим кадром
             execute!(out, MoveTo(0, 0), Clear(ClearType::All))?;
 
             // Заголовок
@@ -90,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             writeln!(out, "{} {:5.1}%", cpu_bar, global_cpu)?;
             execute!(out, ResetColor)?;
 
-            // 2. Вивід ядер у ДВІ колонки для компактності
+            // 2. Вивід ядер у ДВІ колонки для компактності (щоб помістилися всі 28 ядер!)
             writeln!(out, " Per Core Breakdown (2 columns):")?;
             let cpus: Vec<_> = sys.cpus().iter().enumerate().collect();
             let half = (cpus.len() + 1) / 2;
